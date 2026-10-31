@@ -1,17 +1,68 @@
 import axios from 'axios';
 
 const API = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   headers: { 'Content-Type': 'application/json' },
-  timeout: 4000,
+  timeout: 5000,
 });
 
-// Attach JWT token to every request
+// Check if app is deployed without a dedicated live Node backend (e.g. on Vercel static, GitHub Pages, or mobile PWA/Capacitor)
+export const shouldUseMockDirectly = () => {
+  if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim() !== '') {
+    return false;
+  }
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname || '';
+    const proto = window.location.protocol || '';
+    if (
+      host.includes('vercel.app') ||
+      host.includes('now.sh') ||
+      host.includes('netlify.app') ||
+      host.includes('github.io') ||
+      proto === 'capacitor:' ||
+      proto === 'file:'
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// Attach JWT token to every request and intercept static Vercel deployments directly
 API.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  // If in standalone / Vercel static mode, handle directly via fast local database engine
+  if (shouldUseMockDirectly()) {
+    config.adapter = async (cfg) => {
+      let parsedData = {};
+      try {
+        parsedData = typeof cfg.data === 'string' ? JSON.parse(cfg.data) : cfg.data || {};
+      } catch {
+        parsedData = cfg.data || {};
+      }
+      try {
+        const res = await handleMockFallback(cfg.method.toLowerCase(), cfg.url, parsedData, cfg.params);
+        return {
+          data: res.data,
+          status: res.status || 200,
+          statusText: 'OK',
+          headers: {},
+          config: cfg,
+          request: {},
+        };
+      } catch (mockErr) {
+        return Promise.reject({
+          response: mockErr.response || { status: 400, data: { message: 'Operation failed' } },
+          config: cfg,
+        });
+      }
+    };
+  }
+
   return config;
 });
 
@@ -177,36 +228,91 @@ const computeStock = (itemId, transactions) => {
   };
 };
 
-// Mock Router to handle requests if backend is unreachable
+// Mock Router to handle requests if backend is unreachable or running standalone
 const handleMockFallback = (method, url, data = {}, params = {}) => {
   const db = getMockDb();
-  const cleanUrl = url.replace(/^\/api/, '');
+  // Normalize cleanUrl: strip domain, strip leading /api, strip query string
+  const cleanUrl = (url || '')
+    .replace(/^https?:\/\/[^\/]+/, '')
+    .replace(/^\/api/, '')
+    .split('?')[0] || '/';
 
   // Auth: Login
   if (method === 'post' && cleanUrl === '/auth/login') {
-    const { username, password } = data;
-    const user = db.users.find((u) => u.username.toLowerCase() === (username || '').toLowerCase());
-    if (!user) {
-      return Promise.reject({ response: { status: 401, data: { message: 'Invalid username or password.' } } });
+    const rawUsername = (data.username || '').trim();
+    const cleanUser = rawUsername.toLowerCase();
+
+    // Ensure mock DB has users
+    if (!db.users || !Array.isArray(db.users) || db.users.length === 0) {
+      const initial = getInitialMockData();
+      db.users = initial.users;
+      saveMockDb(db);
     }
-    // Check default or allow admin123
-    if (password !== 'admin123' && password !== 'password123' && !user.customPassword) {
-      // allow whatever if password is not totally empty for demo convenience
+
+    let user = db.users.find((u) => u.username && u.username.toLowerCase() === cleanUser);
+
+    // If username is admin or starts with admin, or no user found:
+    if (!user && (cleanUser === 'admin' || !cleanUser)) {
+      user = {
+        _id: 'usr_admin_1',
+        name: 'Kishore (Admin)',
+        username: 'admin',
+        role: 'admin',
+        status: 'active',
+        createdAt: new Date().toISOString(),
+      };
+      db.users.unshift(user);
+      saveMockDb(db);
+    } else if (!user) {
+      // Allow any username so the user or father is never locked out
+      user = {
+        _id: 'usr_' + Date.now(),
+        name: rawUsername ? (rawUsername.charAt(0).toUpperCase() + rawUsername.slice(1)) : 'Kishore (Admin)',
+        username: cleanUser || 'admin',
+        role: 'admin',
+        status: 'active',
+        createdAt: new Date().toISOString(),
+      };
+      db.users.push(user);
+      saveMockDb(db);
     }
+
     const token = 'mock_jwt_token_' + user._id;
     return Promise.resolve({
       status: 200,
       data: {
         success: true,
         token,
-        user: { _id: user._id, name: user.name, username: user.username, role: user.role, lastLogin: new Date().toISOString() },
+        user: {
+          _id: user._id,
+          name: user.name,
+          username: user.username,
+          role: user.role,
+          lastLogin: new Date().toISOString(),
+        },
       },
     });
   }
 
   // Auth: Me
   if (method === 'get' && cleanUrl === '/auth/me') {
-    const current = db.users[0];
+    let current = null;
+    try {
+      const saved = localStorage.getItem('user');
+      if (saved) current = JSON.parse(saved);
+    } catch {}
+    if (!current && db.users && db.users.length > 0) {
+      current = db.users[0];
+    }
+    if (!current) {
+      current = {
+        _id: 'usr_admin_1',
+        name: 'Kishore (Admin)',
+        username: 'admin',
+        role: 'admin',
+        status: 'active',
+      };
+    }
     return Promise.resolve({ status: 200, data: { success: true, user: current } });
   }
 
@@ -507,15 +613,29 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
   return Promise.reject({ response: { status: 404, data: { message: 'Route not found' } } });
 };
 
-// Response interceptor: if 401 redirect, if network error or backend offline, gracefully fall back to mock
+// Response interceptor: if 401 redirect, if network error or backend offline/static, gracefully fall back to mock
 API.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // If Vercel or any SPA server returned index.html (string containing <!doctype html>) instead of JSON
+    if (typeof response?.data === 'string' && (response.data.includes('<!doctype html') || response.data.includes('<html'))) {
+      const { method = 'get', url = '', data, params } = response.config || {};
+      let parsedData = {};
+      try {
+        parsedData = typeof data === 'string' ? JSON.parse(data) : data || {};
+      } catch {
+        parsedData = data || {};
+      }
+      return handleMockFallback(method.toLowerCase(), url, parsedData, params);
+    }
+    return response;
+  },
   (error) => {
-    const isNetworkError = !error.response || error.code === 'ERR_NETWORK' || error.message.includes('Network Error');
-    const isNotFoundOrServerDown = error.response?.status === 502 || error.response?.status === 504 || error.response?.status === 404;
+    const status = error.response?.status;
+    const isNetworkError = !error.response || error.code === 'ERR_NETWORK' || (error.message && error.message.includes('Network Error'));
+    const isStaticOrServerDown = status === 405 || status === 404 || status === 500 || status === 502 || status === 503 || status === 504 || error.code === 'ECONNABORTED';
 
-    if (isNetworkError || isNotFoundOrServerDown) {
-      const { method, url, data, params } = error.config;
+    if (isNetworkError || isStaticOrServerDown) {
+      const { method = 'get', url = '', data, params } = error.config || {};
       let parsedData = {};
       try {
         parsedData = typeof data === 'string' ? JSON.parse(data) : data || {};

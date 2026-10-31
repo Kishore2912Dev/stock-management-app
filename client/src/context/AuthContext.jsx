@@ -4,8 +4,15 @@ import { getMe } from '../services/api';
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -14,13 +21,18 @@ export const AuthProvider = ({ children }) => {
       if (savedToken) {
         try {
           const res = await getMe();
-          setUser(res.data.user);
+          if (res?.data?.user) {
+            setUser(res.data.user);
+            localStorage.setItem('user', JSON.stringify(res.data.user));
+          }
         } catch {
-          // Token invalid — clear storage
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-          setToken(null);
-          setUser(null);
+          // If network or server is offline, keep the offline saved user
+          const savedUser = localStorage.getItem('user');
+          if (!savedUser) {
+            localStorage.removeItem('token');
+            setToken(null);
+            setUser(null);
+          }
         }
       }
       setLoading(false);
