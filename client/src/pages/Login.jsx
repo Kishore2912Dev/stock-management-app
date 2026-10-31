@@ -40,10 +40,20 @@ const Login = () => {
       <div className="login-card">
         {/* Logo */}
         <div className="login-logo">
-          <div className="login-logo-icon">K</div>
+          <img
+            src="/logo.svg"
+            alt="Kishore Cloth Logo"
+            style={{
+              width: '52px',
+              height: '52px',
+              borderRadius: '14px',
+              boxShadow: '0 4px 12px rgba(22,163,74,0.3)',
+              display: 'block',
+            }}
+          />
           <div className="login-logo-text">
             <h2>Kishore Cloth & Cut Pieces</h2>
-            <p>Stock Management System</p>
+            <p>Simple Stock Management</p>
           </div>
         </div>
 

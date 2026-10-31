@@ -268,23 +268,17 @@ const SimpleApp = () => {
         >
           {/* Logo & Shop Name */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div
+            <img
+              src="/logo.svg"
+              alt="Kishore Cloth Logo"
               style={{
-                width: '38px',
-                height: '38px',
-                background: '#16a34a',
-                color: '#ffffff',
-                borderRadius: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 900,
-                fontSize: '18px',
-                boxShadow: '0 2px 6px rgba(22,163,74,0.3)',
+                width: '40px',
+                height: '40px',
+                borderRadius: '11px',
+                boxShadow: '0 2px 8px rgba(22,163,74,0.25)',
+                display: 'block',
               }}
-            >
-              K
-            </div>
+            />
             <div>
               <div style={{ fontWeight: 800, fontSize: '16px', lineHeight: 1.2 }}>
                 Kishore Cloth & Cut Pieces
