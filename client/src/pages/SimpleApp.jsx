@@ -6,18 +6,16 @@ import {
   getTransactions,
   addPurchase,
   addDispatch,
-  addSale,
   createItem,
+  deleteItem,
   reverseTransaction,
 } from '../services/api';
 import toast from 'react-hot-toast';
 import {
   Plus,
   ArrowRight,
-  TrendingUp,
   Warehouse,
   Home,
-  ShoppingBag,
   RotateCcw,
   Search,
   Download,
@@ -26,7 +24,29 @@ import {
   Check,
   RefreshCw,
   Package,
+  Trash2,
+  AlertTriangle,
+  Truck,
 } from 'lucide-react';
+
+const DEFAULT_TRANSPORTS = ['Deepak', 'D.R.T.C', 'RAJKAMAL'];
+
+const loadSavedTransports = () => {
+  try {
+    const raw = localStorage.getItem('kishore_stock_transports');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return DEFAULT_TRANSPORTS;
+};
+
+const saveTransports = (list) => {
+  try {
+    localStorage.setItem('kishore_stock_transports', JSON.stringify(list));
+  } catch {}
+};
 
 const SimpleApp = () => {
   const { user, logoutUser } = useAuth();
@@ -37,12 +57,19 @@ const SimpleApp = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Active Action Modal (Stock In / Move to Shop / Sale)
-  const [actionModal, setActionModal] = useState(null); // { type: 'purchase' | 'dispatch' | 'sale', item }
+  // Active Action Modal (Stock In / Move to Shop)
+  const [actionModal, setActionModal] = useState(null); // { type: 'purchase' | 'dispatch', item }
   const [quantity, setQuantity] = useState(5);
-  const [customerName, setCustomerName] = useState('');
+  const [baleNumber, setBaleNumber] = useState('');
+  const [transportName, setTransportName] = useState('Deepak');
+  const [transportsList, setTransportsList] = useState(loadSavedTransports);
+  const [showNewTransportInput, setShowNewTransportInput] = useState(false);
+  const [newTransportText, setNewTransportText] = useState('');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Delete Cloth Modal
+  const [itemToDelete, setItemToDelete] = useState(null);
 
   // Add Item Modal
   const [showAddItemModal, setShowAddItemModal] = useState(false);
@@ -76,8 +103,11 @@ const SimpleApp = () => {
 
   const openAction = (type, item) => {
     setActionModal({ type, item });
-    setQuantity(type === 'purchase' ? 10 : type === 'dispatch' ? 5 : 1);
-    setCustomerName('');
+    setQuantity(type === 'purchase' ? 10 : 5);
+    setBaleNumber('');
+    setTransportName(transportsList[0] || 'Deepak');
+    setShowNewTransportInput(false);
+    setNewTransportText('');
     setNote('');
   };
 
@@ -92,12 +122,43 @@ const SimpleApp = () => {
         toast.error(`Only ${actionModal.item.godown} bales available in Godown`);
         return prev;
       }
-      if (actionModal?.type === 'sale' && next > actionModal.item.home) {
-        toast.error(`Only ${actionModal.item.home} bales available in Shop`);
-        return prev;
-      }
       return Math.max(1, next);
     });
+  };
+
+  // Smart handler: If user types "2456 * 3" or "2456*3", auto-split into Bale #2456 and Count 3
+  const handleBaleNumberInput = (val) => {
+    setBaleNumber(val);
+    const match = val.match(/^([a-zA-Z0-9\-_]+)\s*[\*xX]\s*(\d+)$/);
+    if (match) {
+      const detectedBaleNo = match[1];
+      const detectedCount = parseInt(match[2], 10);
+      if (detectedCount > 0) {
+        setBaleNumber(detectedBaleNo);
+        setQuantity(detectedCount);
+        toast.success(`Lot set: Bale #${detectedBaleNo} × ${detectedCount} bales`, {
+          id: 'lot-detected',
+          duration: 2000,
+        });
+      }
+    }
+  };
+
+  const handleAddTransport = () => {
+    const trimmed = newTransportText.trim();
+    if (!trimmed) {
+      toast.error('Please enter a transport name');
+      return;
+    }
+    if (!transportsList.includes(trimmed)) {
+      const updated = [...transportsList, trimmed];
+      setTransportsList(updated);
+      saveTransports(updated);
+      toast.success(`Transport "${trimmed}" added!`);
+    }
+    setTransportName(trimmed);
+    setShowNewTransportInput(false);
+    setNewTransportText('');
   };
 
   const handleConfirmAction = async () => {
@@ -115,38 +176,33 @@ const SimpleApp = () => {
       return;
     }
 
-    if (type === 'sale' && qty > item.home) {
-      toast.error(`Cannot sell ${qty} bales. Shop only has ${item.home} bales.`);
-      return;
-    }
-
     setSubmitting(true);
     try {
+      const cleanBale = (baleNumber || '').trim();
+      const cleanTransport = (transportName || '').trim();
+
       if (type === 'purchase') {
         await addPurchase({
           itemId: item._id,
           quantity: qty,
+          baleNumber: cleanBale,
+          transportName: cleanTransport,
           transactionDate: new Date().toISOString().split('T')[0],
-          remarks: note || 'New stock inward',
+          remarks: note || (cleanBale ? `Bale #${cleanBale} via ${cleanTransport || 'Direct'}` : 'Stock Inward'),
         });
-        toast.success(`Added ${qty} bales of ${item.itemName} to Godown!`);
+        const lotInfo = cleanBale ? ` (Bale #${cleanBale} × ${qty})` : ` (${qty} bales)`;
+        toast.success(`Added ${item.itemName} to Godown${lotInfo}!`);
       } else if (type === 'dispatch') {
         await addDispatch({
           itemId: item._id,
           quantity: qty,
+          baleNumber: cleanBale,
+          transportName: cleanTransport,
           transactionDate: new Date().toISOString().split('T')[0],
-          remarks: note || 'Moved to shop',
+          remarks: note || (cleanBale ? `Bale #${cleanBale} to Shop` : 'Moved to Shop'),
         });
-        toast.success(`Moved ${qty} bales of ${item.itemName} to Shop!`);
-      } else if (type === 'sale') {
-        await addSale({
-          itemId: item._id,
-          quantity: qty,
-          customerName: customerName || 'Cash Customer',
-          transactionDate: new Date().toISOString().split('T')[0],
-          remarks: note || 'Sold to customer',
-        });
-        toast.success(`Recorded sale of ${qty} bales of ${item.itemName}!`);
+        const lotInfo = cleanBale ? ` (Bale #${cleanBale} × ${qty})` : ` (${qty} bales)`;
+        toast.success(`Moved ${item.itemName} to Shop${lotInfo}!`);
       }
 
       closeActionModal();
@@ -194,6 +250,21 @@ const SimpleApp = () => {
     }
   };
 
+  const handleDeleteItem = async (item) => {
+    if (!item?._id) return;
+    setSubmitting(true);
+    try {
+      await deleteItem(item._id);
+      toast.success(`Removed "${item.itemName}" from stock.`);
+      setItemToDelete(null);
+      loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to remove cloth item.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleUndo = async (tx) => {
     if (!window.confirm('Do you want to undo this action?')) return;
     try {
@@ -210,13 +281,12 @@ const SimpleApp = () => {
       toast.error('No items to export');
       return;
     }
-    const headers = ['Cloth Name', 'Godown Bales', 'Shop Bales', 'Total Remaining', 'Total Sold'];
+    const headers = ['Cloth Name', 'Godown Bales', 'Shop Bales', 'Total Stock'];
     const rows = items.map((i) => [
       `"${i.itemName}"`,
       i.godown || 0,
       i.home || 0,
       (i.godown || 0) + (i.home || 0),
-      i.sold || 0,
     ]);
     const csvContent =
       'data:text/csv;charset=utf-8,' +
@@ -230,11 +300,10 @@ const SimpleApp = () => {
     toast.success('Stock report downloaded.');
   };
 
-  // Calculations
+  // Calculations (Godown, Shop, Total Stock — "Sold" removed)
   const totalGodown = items.reduce((sum, i) => sum + (i.godown || 0), 0);
   const totalShop = items.reduce((sum, i) => sum + (i.home || 0), 0);
-  const totalSold = items.reduce((sum, i) => sum + (i.sold || 0), 0);
-  const totalRemaining = totalGodown + totalShop;
+  const totalStock = totalGodown + totalShop;
 
   const filteredItems = items.filter((i) =>
     i.itemName.toLowerCase().includes(searchTerm.toLowerCase())
@@ -375,7 +444,7 @@ const SimpleApp = () => {
       {/* Main Page Body */}
       <main style={{ maxWidth: '1050px', margin: '0 auto', padding: '24px 16px 80px' }}>
         
-        {/* Modern 3-Card Summary Banner */}
+        {/* Modern 3-Card Summary Banner (Godown, Shop, Total Stock) */}
         <div
           style={{
             display: 'grid',
@@ -446,7 +515,7 @@ const SimpleApp = () => {
                 {totalShop}
               </div>
               <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-                Bales ready for customers
+                Bales ready in shop
               </div>
             </div>
             <div
@@ -466,36 +535,36 @@ const SimpleApp = () => {
             </div>
           </div>
 
-          {/* Sold Card */}
+          {/* Total Stock Card (Replaces Sold) */}
           <div
             style={{
               background: '#ffffff',
-              border: '1.5px solid #fde68a',
+              border: '1.5px solid #fed7aa',
               borderRadius: '18px',
               padding: '18px 20px',
-              boxShadow: '0 4px 12px rgba(217, 119, 6, 0.06)',
+              boxShadow: '0 4px 12px rgba(234, 88, 12, 0.06)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
             }}
           >
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Total Sold
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#ea580c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Total Available Stock
               </div>
-              <div style={{ fontSize: '32px', fontWeight: 900, color: '#b45309', marginTop: '2px', lineHeight: 1 }}>
-                {totalSold}
+              <div style={{ fontSize: '32px', fontWeight: 900, color: '#c2410c', marginTop: '2px', lineHeight: 1 }}>
+                {totalStock}
               </div>
               <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-                Bales sold to buyers
+                All bales (Godown + Shop)
               </div>
             </div>
             <div
               style={{
                 width: '46px',
                 height: '46px',
-                background: '#fef3c7',
-                color: '#d97706',
+                background: '#ffedd5',
+                color: '#ea580c',
                 borderRadius: '14px',
                 display: 'flex',
                 alignItems: 'center',
@@ -503,7 +572,7 @@ const SimpleApp = () => {
                 fontSize: '22px',
               }}
             >
-              💰
+              📦
             </div>
           </div>
         </div>
@@ -524,7 +593,7 @@ const SimpleApp = () => {
               Cloth Stock & Actions
             </h2>
             <p style={{ fontSize: '13px', color: '#64748b', margin: '2px 0 0' }}>
-              Tap on any button below to add stock, move to shop, or record a sale
+              Add stock into godown or move bales from godown to shop
             </p>
           </div>
 
@@ -612,7 +681,7 @@ const SimpleApp = () => {
                   transition: 'all 0.15s ease',
                 }}
               >
-                {/* Item Info Header */}
+                {/* Item Info Header with Remove Cloth Button */}
                 <div
                   style={{
                     display: 'flex',
@@ -624,15 +693,38 @@ const SimpleApp = () => {
                   }}
                 >
                   <div>
-                    <h3 style={{ fontSize: '18px', fontWeight: 800, margin: 0, color: '#0f172a' }}>
-                      {item.itemName}
-                    </h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <h3 style={{ fontSize: '18px', fontWeight: 800, margin: 0, color: '#0f172a' }}>
+                        {item.itemName}
+                      </h3>
+                      {/* Remove Cloth Button */}
+                      <button
+                        onClick={() => setItemToDelete(item)}
+                        title={`Remove ${item.itemName} from stock`}
+                        style={{
+                          background: '#fef2f2',
+                          border: '1px solid #fecaca',
+                          color: '#dc2626',
+                          borderRadius: '8px',
+                          padding: '3px 8px',
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <Trash2 size={12} />
+                        Remove
+                      </button>
+                    </div>
                     <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
                       Code: {item.itemCode || item.itemName.toUpperCase()}
                     </span>
                   </div>
 
-                  {/* Stock Badges */}
+                  {/* Stock Badges (Godown & Shop) */}
                   <div style={{ display: 'flex', gap: '10px' }}>
                     <div
                       style={{
@@ -642,6 +734,7 @@ const SimpleApp = () => {
                         borderRadius: '10px',
                         padding: '6px 14px',
                         textAlign: 'center',
+                        minWidth: '85px',
                       }}
                     >
                       <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Godown</div>
@@ -658,6 +751,7 @@ const SimpleApp = () => {
                         borderRadius: '10px',
                         padding: '6px 14px',
                         textAlign: 'center',
+                        minWidth: '85px',
                       }}
                     >
                       <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>In Shop</div>
@@ -668,11 +762,11 @@ const SimpleApp = () => {
                   </div>
                 </div>
 
-                {/* 3 Large Action Buttons */}
+                {/* 2 Big Action Buttons: + Stock In & Move to Shop (Sold REMOVED) */}
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
                     gap: '10px',
                     marginTop: '8px',
                   }}
@@ -685,9 +779,9 @@ const SimpleApp = () => {
                       color: '#15803d',
                       border: '1.5px solid #86efac',
                       borderRadius: '12px',
-                      padding: '12px 10px',
+                      padding: '13px 12px',
                       fontWeight: 800,
-                      fontSize: '13.5px',
+                      fontSize: '14px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -711,9 +805,9 @@ const SimpleApp = () => {
                       color: (item.godown || 0) > 0 ? '#1d4ed8' : '#94a3b8',
                       border: '1.5px solid ' + ((item.godown || 0) > 0 ? '#93c5fd' : '#e2e8f0'),
                       borderRadius: '12px',
-                      padding: '12px 10px',
+                      padding: '13px 12px',
                       fontWeight: 800,
-                      fontSize: '13.5px',
+                      fontSize: '14px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -727,39 +821,13 @@ const SimpleApp = () => {
                     <span style={{ fontSize: '18px' }}>🚚</span>
                     <span>Move to Shop</span>
                   </button>
-
-                  {/* Action 3: Sold */}
-                  <button
-                    onClick={() => openAction('sale', item)}
-                    disabled={(item.home || 0) <= 0}
-                    style={{
-                      background: (item.home || 0) > 0 ? '#fffbeb' : '#f8fafc',
-                      color: (item.home || 0) > 0 ? '#b45309' : '#94a3b8',
-                      border: '1.5px solid ' + ((item.home || 0) > 0 ? '#fde68a' : '#e2e8f0'),
-                      borderRadius: '12px',
-                      padding: '12px 10px',
-                      fontWeight: 800,
-                      fontSize: '13.5px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      cursor: (item.home || 0) > 0 ? 'pointer' : 'not-allowed',
-                      transition: 'background 0.15s',
-                    }}
-                    onMouseEnter={(e) => (item.home || 0) > 0 && (e.currentTarget.style.background = '#fef3c7')}
-                    onMouseLeave={(e) => (item.home || 0) > 0 && (e.currentTarget.style.background = '#fffbeb')}
-                  >
-                    <span style={{ fontSize: '18px' }}>💰</span>
-                    <span>Sold</span>
-                  </button>
                 </div>
               </div>
             ))
           )}
         </div>
 
-        {/* RECENT ACTIVITY & RECEIPTS FEED */}
+        {/* RECENT ACTIVITY LOG */}
         <div
           style={{
             background: '#ffffff',
@@ -774,7 +842,7 @@ const SimpleApp = () => {
             <h3 style={{ fontSize: '16px', fontWeight: 800, margin: 0, color: '#0f172a' }}>
               📋 Today's Activity Log
             </h3>
-            <span style={{ fontSize: '12px', color: '#64748b' }}>Latest 10 actions</span>
+            <span style={{ fontSize: '12px', color: '#64748b' }}>Latest actions</span>
           </div>
 
           {recentActions.length === 0 ? (
@@ -794,29 +862,52 @@ const SimpleApp = () => {
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      padding: '11px 14px',
+                      padding: '12px 14px',
                       borderRadius: '12px',
-                      background: tx.isReversed ? '#f8fafc' : isPurchase ? '#f0fdf4' : isDispatch ? '#eff6ff' : '#fffbeb',
-                      border: '1px solid ' + (tx.isReversed ? '#e2e8f0' : isPurchase ? '#bbf7d0' : isDispatch ? '#bfdbfe' : '#fde68a'),
+                      background: tx.isReversed ? '#f8fafc' : isPurchase ? '#f0fdf4' : '#eff6ff',
+                      border: '1px solid ' + (tx.isReversed ? '#e2e8f0' : isPurchase ? '#bbf7d0' : '#bfdbfe'),
                       opacity: tx.isReversed ? 0.45 : 1,
+                      flexWrap: 'wrap',
+                      gap: '8px',
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ fontSize: '18px' }}>
-                        {isPurchase ? '📥' : isDispatch ? '🚚' : '💰'}
+                      <span style={{ fontSize: '20px' }}>
+                        {isPurchase ? '📥' : '🚚'}
                       </span>
                       <div>
                         <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
                           <strong>{tx.itemId?.itemName || 'Cloth'}</strong> –{' '}
-                          <span style={{ color: isPurchase ? '#15803d' : isDispatch ? '#1d4ed8' : '#b45309' }}>
-                            {tx.quantity} bales{' '}
-                            {isPurchase ? 'added to Godown' : isDispatch ? 'moved to Shop' : 'Sold'}
+                          <span style={{ color: isPurchase ? '#15803d' : '#1d4ed8' }}>
+                            {tx.quantity} bales {isPurchase ? 'added to Godown' : 'moved to Shop'}
                           </span>
+                          {tx.baleNumber && (
+                            <span
+                              style={{
+                                marginLeft: '8px',
+                                fontSize: '12px',
+                                fontWeight: 800,
+                                color: '#0f172a',
+                                background: '#e2e8f0',
+                                padding: '2px 8px',
+                                borderRadius: '6px',
+                                display: 'inline-block',
+                              }}
+                            >
+                              Bale #{tx.baleNumber} × {tx.quantity}
+                            </span>
+                          )}
                         </div>
-                        <div style={{ fontSize: '11.5px', color: '#64748b' }}>
-                          {tx.customerName ? `Customer: ${tx.customerName} • ` : ''}
-                          {tx.remarks ? `${tx.remarks} • ` : ''}
-                          {new Date(tx.transactionDate || tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+                          {tx.transportName && (
+                            <span style={{ color: '#2563eb', fontWeight: 700 }}>
+                              🚚 {tx.transportName}
+                            </span>
+                          )}
+                          {tx.transportName && tx.remarks && <span>•</span>}
+                          {tx.remarks && <span>{tx.remarks}</span>}
+                          <span>•</span>
+                          <span>{new Date(tx.transactionDate || tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                       </div>
                     </div>
@@ -830,7 +921,7 @@ const SimpleApp = () => {
                           border: '1px solid #fca5a5',
                           color: '#dc2626',
                           borderRadius: '8px',
-                          padding: '5px 9px',
+                          padding: '5px 10px',
                           fontSize: '12px',
                           fontWeight: 700,
                           cursor: 'pointer',
@@ -851,7 +942,7 @@ const SimpleApp = () => {
         </div>
       </main>
 
-      {/* ACTION STEPPER MODAL */}
+      {/* ACTION STEPPER MODAL (Stock In / Move to Shop) */}
       {actionModal && (
         <div className="modal-overlay" onClick={closeActionModal} style={{ zIndex: 1000 }}>
           <div
@@ -865,18 +956,14 @@ const SimpleApp = () => {
             }}
           >
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ fontSize: '28px' }}>
-                  {actionModal.type === 'purchase' ? '📥' : actionModal.type === 'dispatch' ? '🚚' : '💰'}
+                  {actionModal.type === 'purchase' ? '📥' : '🚚'}
                 </span>
                 <div>
                   <h3 style={{ fontSize: '18px', fontWeight: 900, margin: 0, color: '#0f172a' }}>
-                    {actionModal.type === 'purchase'
-                      ? 'Stock In to Godown'
-                      : actionModal.type === 'dispatch'
-                      ? 'Move Stock to Shop'
-                      : 'Record Customer Sale'}
+                    {actionModal.type === 'purchase' ? 'Stock In to Godown' : 'Move Stock to Shop'}
                   </h3>
                   <div style={{ fontSize: '13px', color: '#16a34a', fontWeight: 700 }}>
                     {actionModal.item.itemName}
@@ -908,7 +995,7 @@ const SimpleApp = () => {
                 border: '1px dashed #cbd5e1',
                 borderRadius: '12px',
                 padding: '10px 14px',
-                marginBottom: '18px',
+                marginBottom: '16px',
                 fontSize: '12.5px',
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -918,18 +1005,44 @@ const SimpleApp = () => {
               <span>Shop: <strong>{actionModal.item.home || 0} bales</strong></span>
             </div>
 
-            {/* Big Stepper Quantity Display */}
-            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Quantity (Bales)
+            {/* BALE NUMBER INPUT (with auto 2456*3 parsing) */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155', display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <span>🏷️ Bale Number</span>
+                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>e.g. 2456 or 2456*3</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Enter Bale # (e.g. 2456 or 2456 * 3)"
+                value={baleNumber}
+                onChange={(e) => handleBaleNumberInput(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  fontSize: '14.5px',
+                  fontWeight: 600,
+                  borderRadius: '10px',
+                  border: '1.5px solid #cbd5e1',
+                  outline: 'none',
+                }}
+              />
+              <span style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                Tip: Typing <b>2456*3</b> automatically sets Bale #2456 and Count to 3 bales.
+              </span>
+            </div>
+
+            {/* Stepper Quantity Display & Buttons */}
+            <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                Number of Bales (Count)
               </div>
               <div
                 style={{
-                  fontSize: '52px',
+                  fontSize: '48px',
                   fontWeight: 900,
-                  color: actionModal.type === 'purchase' ? '#15803d' : actionModal.type === 'dispatch' ? '#1d4ed8' : '#b45309',
+                  color: actionModal.type === 'purchase' ? '#15803d' : '#1d4ed8',
                   lineHeight: 1.1,
-                  margin: '10px 0',
+                  margin: '8px 0',
                 }}
               >
                 {quantity}
@@ -1018,37 +1131,133 @@ const SimpleApp = () => {
               </div>
             </div>
 
-            {/* Optional Customer Name if Sale */}
-            {actionModal.type === 'sale' && (
-              <div style={{ marginBottom: '14px' }}>
-                <label style={{ fontSize: '12.5px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '4px' }}>
-                  Customer Name (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Sri Balaji Silks / Retail Buyer"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    fontSize: '14px',
-                    borderRadius: '10px',
-                    border: '1.5px solid #cbd5e1',
-                    outline: 'none',
-                  }}
-                />
+            {/* Live Lot Preview Badge (e.g. 2456 * 3) */}
+            {baleNumber && (
+              <div
+                style={{
+                  background: '#f0fdf4',
+                  border: '1px solid #86efac',
+                  color: '#15803d',
+                  borderRadius: '10px',
+                  padding: '8px 12px',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  marginBottom: '16px',
+                }}
+              >
+                🏷️ Bale Lot: <b>{baleNumber} × {quantity}</b> ({quantity} {quantity === 1 ? 'bale' : 'bales'})
               </div>
             )}
 
-            {/* Optional Note */}
+            {/* TRANSPORT NAME DROPDOWN */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155', display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <span>🚚 Transport Name</span>
+                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>Select or add new</span>
+              </label>
+              
+              <select
+                value={showNewTransportInput ? '__new__' : transportName}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setShowNewTransportInput(true);
+                  } else {
+                    setShowNewTransportInput(false);
+                    setTransportName(e.target.value);
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  fontSize: '14px',
+                  borderRadius: '10px',
+                  border: '1.5px solid #cbd5e1',
+                  background: '#ffffff',
+                  fontWeight: 600,
+                  color: '#0f172a',
+                  outline: 'none',
+                }}
+              >
+                <option value="">-- No Transport / Direct --</option>
+                {transportsList.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                <option value="__new__">➕ + Add New Transport...</option>
+              </select>
+
+              {/* Inline Add New Transport Input */}
+              {showNewTransportInput && (
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Enter transport name..."
+                    value={newTransportText}
+                    onChange={(e) => setNewTransportText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddTransport();
+                      }
+                    }}
+                    autoFocus
+                    style={{
+                      flex: 1,
+                      padding: '9px 12px',
+                      fontSize: '13.5px',
+                      borderRadius: '9px',
+                      border: '1.5px solid #2563eb',
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddTransport}
+                    style={{
+                      background: '#2563eb',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '9px',
+                      padding: '9px 14px',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewTransportInput(false);
+                      setNewTransportText('');
+                    }}
+                    style={{
+                      background: '#f1f5f9',
+                      color: '#64748b',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '9px',
+                      padding: '9px 12px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Optional Note / Bill # */}
             <div style={{ marginBottom: '18px' }}>
               <label style={{ fontSize: '12.5px', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '4px' }}>
-                Note / Bill # (Optional)
+                Note / Lorry Receipt # (Optional)
               </label>
               <input
                 type="text"
-                placeholder="e.g. Lorry # / Invoice # / Cash"
+                placeholder="e.g. Lorry # / Invoice # / Surat Mill"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 style={{
@@ -1069,7 +1278,7 @@ const SimpleApp = () => {
               disabled={submitting}
               style={{
                 width: '100%',
-                background: actionModal.type === 'purchase' ? '#16a34a' : actionModal.type === 'dispatch' ? '#2563eb' : '#d97706',
+                background: actionModal.type === 'purchase' ? '#16a34a' : '#2563eb',
                 color: '#ffffff',
                 border: 'none',
                 borderRadius: '14px',
@@ -1087,6 +1296,88 @@ const SimpleApp = () => {
               <Check size={20} />
               {submitting ? 'Saving...' : 'Confirm & Save'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRMATION MODAL FOR REMOVING CLOTH ITEM */}
+      {itemToDelete && (
+        <div className="modal-overlay" onClick={() => setItemToDelete(null)} style={{ zIndex: 1100 }}>
+          <div
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '400px',
+              borderRadius: '22px',
+              padding: '24px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.25)',
+              textAlign: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                background: '#fee2e2',
+                color: '#dc2626',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 14px',
+                fontSize: '26px',
+              }}
+            >
+              <Trash2 size={26} />
+            </div>
+
+            <h3 style={{ fontSize: '18px', fontWeight: 900, color: '#0f172a', margin: '0 0 8px' }}>
+              Remove Cloth Item?
+            </h3>
+
+            <p style={{ fontSize: '14px', color: '#64748b', margin: '0 0 20px', lineHeight: 1.5 }}>
+              Are you sure you want to remove <strong>"{itemToDelete.itemName}"</strong> from stock?
+              This will remove all its bales from Godown and Shop.
+            </p>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setItemToDelete(null)}
+                style={{
+                  flex: 1,
+                  background: '#f1f5f9',
+                  color: '#334155',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '12px',
+                  padding: '12px',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteItem(itemToDelete)}
+                disabled={submitting}
+                style={{
+                  flex: 1,
+                  background: '#dc2626',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '12px',
+                  padding: '12px',
+                  fontSize: '14px',
+                  fontWeight: 800,
+                  cursor: submitting ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 2px 8px rgba(220, 38, 38, 0.3)',
+                }}
+              >
+                {submitting ? 'Removing...' : 'Yes, Remove'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1203,4 +1494,3 @@ const SimpleApp = () => {
 };
 
 export default SimpleApp;
-

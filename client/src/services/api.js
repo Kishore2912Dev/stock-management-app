@@ -397,6 +397,18 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     }
   }
 
+  // Items: Delete
+  if (method === 'delete' && cleanUrl.startsWith('/items/')) {
+    const id = cleanUrl.split('/')[2];
+    db.items = (db.items || []).filter((i) => i._id !== id);
+    db.transactions = (db.transactions || []).filter((tx) => (tx.itemId?._id || tx.itemId) !== id);
+    saveMockDb(db);
+    return Promise.resolve({
+      status: 200,
+      data: { success: true, message: 'Cloth item removed successfully.' },
+    });
+  }
+
   // Transactions: Dashboard
   if (method === 'get' && cleanUrl === '/transactions/dashboard') {
     let totalGodown = 0;
@@ -487,9 +499,11 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     const item = db.items.find((i) => i._id === data.itemId);
     const newTx = {
       _id: 'tx_' + Date.now(),
-      itemId: { _id: item._id, itemName: item.itemName, itemCode: item.itemCode },
+      itemId: item ? { _id: item._id, itemName: item.itemName, itemCode: item.itemCode } : { _id: data.itemId, itemName: 'Cloth' },
       transactionType: 'purchase',
       quantity: Number(data.quantity),
+      baleNumber: data.baleNumber || '',
+      transportName: data.transportName || '',
       transactionDate: data.transactionDate || new Date().toISOString(),
       remarks: data.remarks || '',
       createdBy: { name: 'Admin', username: 'admin' },
@@ -499,7 +513,7 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     saveMockDb(db);
     return Promise.resolve({
       status: 201,
-      data: { success: true, message: `Purchase of ${data.quantity} bales recorded.`, data: newTx },
+      data: { success: true, message: `Added ${data.quantity} bales to Godown.`, data: newTx },
     });
   }
 
@@ -516,9 +530,11 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
 
     const newTx = {
       _id: 'tx_' + Date.now(),
-      itemId: { _id: item._id, itemName: item.itemName, itemCode: item.itemCode },
+      itemId: item ? { _id: item._id, itemName: item.itemName, itemCode: item.itemCode } : { _id: data.itemId, itemName: 'Cloth' },
       transactionType: 'dispatch',
       quantity: qty,
+      baleNumber: data.baleNumber || '',
+      transportName: data.transportName || '',
       transactionDate: data.transactionDate || new Date().toISOString(),
       remarks: data.remarks || '',
       createdBy: { name: 'Admin', username: 'admin' },
@@ -528,7 +544,7 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     saveMockDb(db);
     return Promise.resolve({
       status: 201,
-      data: { success: true, message: `Dispatch of ${qty} bales recorded.`, data: newTx },
+      data: { success: true, message: `Moved ${qty} bales to Shop.`, data: newTx },
     });
   }
 
@@ -670,6 +686,7 @@ export const getItems = (params) => API.get('/items', { params });
 export const getItem = (id) => API.get(`/items/${id}`);
 export const createItem = (data) => API.post('/items', data);
 export const updateItem = (id, data) => API.put(`/items/${id}`, data);
+export const deleteItem = (id) => API.delete(`/items/${id}`);
 
 // Transactions
 export const getDashboard = () => API.get('/transactions/dashboard');
