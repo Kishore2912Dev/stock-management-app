@@ -544,7 +544,7 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     saveMockDb(db);
     return Promise.resolve({
       status: 201,
-      data: { success: true, message: `Moved ${qty} bales to Shop.`, data: newTx },
+      data: { success: true, message: `Moved ${qty} bales to Home.`, data: newTx },
     });
   }
 
