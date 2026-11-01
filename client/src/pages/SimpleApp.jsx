@@ -13,9 +13,6 @@ import {
 import toast from 'react-hot-toast';
 import {
   Plus,
-  ArrowRight,
-  Warehouse,
-  Home,
   RotateCcw,
   Search,
   Download,
@@ -25,7 +22,8 @@ import {
   RefreshCw,
   Package,
   Trash2,
-  Truck,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 const DEFAULT_TRANSPORTS = ['Deepak', 'D.R.T.C', 'RAJKAMAL'];
@@ -55,6 +53,9 @@ const SimpleApp = () => {
   const [recentActions, setRecentActions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Expandable Bales breakdown per item: { [itemId]: boolean }
+  const [expandedBales, setExpandedBales] = useState({});
 
   // Active Action Modal (Stock In / Move to Home)
   const [actionModal, setActionModal] = useState(null); // { type: 'purchase' | 'dispatch', item }
@@ -106,25 +107,67 @@ const SimpleApp = () => {
 
   const openAction = (type, item) => {
     setActionModal({ type, item });
-    setQuantity(type === 'purchase' ? 10 : 5);
-    setBaleNumber('');
-    setTransportName(transportsList[0] || 'Deepak');
     setShowNewTransportInput(false);
     setNewTransportText('');
     setNote('');
+
+    if (type === 'dispatch') {
+      // Move to Home: default to the first available bale in Godown
+      const availableBales = item.balesInGodown || [];
+      if (availableBales.length > 0) {
+        const first = availableBales[0];
+        setBaleNumber(first.baleNumber || '');
+        setQuantity(Math.min(5, first.count));
+        setTransportName(first.transportName || transportsList[0] || 'Deepak');
+      } else {
+        setBaleNumber('');
+        setQuantity(Math.min(5, item.godown || 1));
+        setTransportName(transportsList[0] || 'Deepak');
+      }
+    } else {
+      // Stock In
+      setQuantity(10);
+      setBaleNumber('');
+      setTransportName(transportsList[0] || 'Deepak');
+    }
   };
 
   const closeActionModal = () => {
     setActionModal(null);
   };
 
-  // Stepper quantity adjustment (steppers: -5, -1, +1, +5)
+  // In Move to Home: user selects which bale in Godown they are moving
+  const handleSelectBaleToMove = (selectedBaleNo) => {
+    setBaleNumber(selectedBaleNo);
+    if (!actionModal?.item) return;
+    const match = actionModal.item.balesInGodown?.find(
+      (b) => (b.baleNumber || '') === selectedBaleNo
+    );
+    if (match) {
+      setQuantity((prev) => Math.min(prev, match.count) || 1);
+      if (match.transportName) {
+        setTransportName(match.transportName);
+      }
+    }
+  };
+
+  // Stepper quantity adjustment (steppers: -5, -1, +1, +5) with strict Godown bale limit
   const adjustQty = (delta) => {
     setQuantity((prev) => {
       const next = prev + delta;
-      if (actionModal?.type === 'dispatch' && next > actionModal.item.godown) {
-        toast.error(`Only ${actionModal.item.godown} bales available in Godown`);
-        return prev;
+      if (actionModal?.type === 'dispatch') {
+        const targetBale = actionModal.item.balesInGodown?.find(
+          (b) => (b.baleNumber || '').toLowerCase() === (baleNumber || '').toLowerCase()
+        );
+        const maxLimit = targetBale ? targetBale.count : actionModal.item.godown;
+        if (next > maxLimit) {
+          toast.error(
+            targetBale
+              ? `Only ${targetBale.count} bales of #${targetBale.baleNumber || 'this bale'} in Godown`
+              : `Only ${actionModal.item.godown} bales available in Godown`
+          );
+          return Math.max(1, maxLimit);
+        }
       }
       return Math.max(1, next);
     });
@@ -204,9 +247,36 @@ const SimpleApp = () => {
       return;
     }
 
-    if (type === 'dispatch' && qty > item.godown) {
-      toast.error(`Cannot move ${qty} bales. Godown only has ${item.godown} bales.`);
-      return;
+    if (type === 'dispatch') {
+      const cleanBale = (baleNumber || '').trim();
+      const availableBales = item.balesInGodown || [];
+
+      if (availableBales.length > 0) {
+        if (!cleanBale) {
+          toast.error('Please select an existing bale from Godown');
+          return;
+        }
+
+        const match = availableBales.find(
+          (b) => (b.baleNumber || '').toLowerCase() === cleanBale.toLowerCase()
+        );
+
+        if (!match || match.count <= 0) {
+          const listNames = availableBales
+            .map((b) => (b.baleNumber ? `#${b.baleNumber} (${b.count} bales)` : `Standard (${b.count} bales)`))
+            .join(', ');
+          toast.error(`Bale #${cleanBale} is not in Godown! Available: ${listNames}`);
+          return;
+        }
+
+        if (qty > match.count) {
+          toast.error(`Only ${match.count} bales of #${match.baleNumber} are in Godown. Cannot move ${qty} bales.`);
+          return;
+        }
+      } else if (qty > item.godown) {
+        toast.error(`Cannot move ${qty} bales. Godown only has ${item.godown} bales.`);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -728,161 +798,305 @@ const SimpleApp = () => {
               </button>
             </div>
           ) : (
-            filteredItems.map((item) => (
-              <div
-                key={item._id}
-                style={{
-                  background: '#ffffff',
-                  border: '1.5px solid #e2e8f0',
-                  borderRadius: '18px',
-                  padding: '18px 20px',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                {/* Item Info Header with Remove Cloth Button */}
+            filteredItems.map((item) => {
+              const isExpanded = expandedBales[item._id];
+              const godownLots = item.balesInGodown || [];
+              const homeLots = item.balesInHome || [];
+
+              return (
                 <div
+                  key={item._id}
                   style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '14px',
-                    flexWrap: 'wrap',
-                    gap: '10px',
+                    background: '#ffffff',
+                    border: '1.5px solid #e2e8f0',
+                    borderRadius: '18px',
+                    padding: '18px 20px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <h3 style={{ fontSize: '18px', fontWeight: 800, margin: 0, color: '#0f172a' }}>
-                        {item.itemName}
-                      </h3>
-                      {/* Remove Cloth Button */}
-                      <button
-                        onClick={() => setItemToDelete(item)}
-                        title={`Remove ${item.itemName} from stock`}
+                  {/* Item Info Header with Remove Cloth Button */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '12px',
+                      flexWrap: 'wrap',
+                      gap: '10px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <h3 style={{ fontSize: '18px', fontWeight: 800, margin: 0, color: '#0f172a' }}>
+                          {item.itemName}
+                        </h3>
+                        {/* Remove Cloth Button */}
+                        <button
+                          onClick={() => setItemToDelete(item)}
+                          title={`Remove ${item.itemName} from stock`}
+                          style={{
+                            background: '#fef2f2',
+                            border: '1px solid #fecaca',
+                            color: '#dc2626',
+                            borderRadius: '8px',
+                            padding: '3px 8px',
+                            fontSize: '11.5px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <Trash2 size={12} />
+                          Remove
+                        </button>
+                      </div>
+                      <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
+                        Code: {item.itemCode || item.itemName.toUpperCase()}
+                      </span>
+                    </div>
+
+                    {/* Stock Badges (Godown & Home) */}
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <div
                         style={{
-                          background: '#fef2f2',
-                          border: '1px solid #fecaca',
-                          color: '#dc2626',
-                          borderRadius: '8px',
-                          padding: '3px 8px',
-                          fontSize: '11.5px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
+                          background: (item.godown || 0) > 0 ? '#f0fdf4' : '#fef2f2',
+                          border: '1px solid ' + ((item.godown || 0) > 0 ? '#bbf7d0' : '#fecaca'),
+                          color: (item.godown || 0) > 0 ? '#15803d' : '#991b1b',
+                          borderRadius: '10px',
+                          padding: '6px 14px',
+                          textAlign: 'center',
+                          minWidth: '85px',
                         }}
                       >
-                        <Trash2 size={12} />
-                        Remove
-                      </button>
-                    </div>
-                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
-                      Code: {item.itemCode || item.itemName.toUpperCase()}
-                    </span>
-                  </div>
-
-                  {/* Stock Badges (Godown & Home) */}
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <div
-                      style={{
-                        background: (item.godown || 0) > 0 ? '#f0fdf4' : '#fef2f2',
-                        border: '1px solid ' + ((item.godown || 0) > 0 ? '#bbf7d0' : '#fecaca'),
-                        color: (item.godown || 0) > 0 ? '#15803d' : '#991b1b',
-                        borderRadius: '10px',
-                        padding: '6px 14px',
-                        textAlign: 'center',
-                        minWidth: '85px',
-                      }}
-                    >
-                      <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Godown</div>
-                      <div style={{ fontSize: '18px', fontWeight: 900 }}>
-                        {item.godown || 0} <span style={{ fontSize: '11px', fontWeight: 600 }}>bales</span>
+                        <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Godown</div>
+                        <div style={{ fontSize: '18px', fontWeight: 900 }}>
+                          {item.godown || 0} <span style={{ fontSize: '11px', fontWeight: 600 }}>bales</span>
+                        </div>
                       </div>
-                    </div>
 
-                    <div
-                      style={{
-                        background: (item.home || 0) > 0 ? '#eff6ff' : '#f8fafc',
-                        border: '1px solid ' + ((item.home || 0) > 0 ? '#bfdbfe' : '#e2e8f0'),
-                        color: (item.home || 0) > 0 ? '#1d4ed8' : '#64748b',
-                        borderRadius: '10px',
-                        padding: '6px 14px',
-                        textAlign: 'center',
-                        minWidth: '85px',
-                      }}
-                    >
-                      <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>At Home</div>
-                      <div style={{ fontSize: '18px', fontWeight: 900 }}>
-                        {item.home || 0} <span style={{ fontSize: '11px', fontWeight: 600 }}>bales</span>
+                      <div
+                        style={{
+                          background: (item.home || 0) > 0 ? '#eff6ff' : '#f8fafc',
+                          border: '1px solid ' + ((item.home || 0) > 0 ? '#bfdbfe' : '#e2e8f0'),
+                          color: (item.home || 0) > 0 ? '#1d4ed8' : '#64748b',
+                          borderRadius: '10px',
+                          padding: '6px 14px',
+                          textAlign: 'center',
+                          minWidth: '85px',
+                        }}
+                      >
+                        <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>At Home</div>
+                        <div style={{ fontSize: '18px', fontWeight: 900 }}>
+                          {item.home || 0} <span style={{ fontSize: '11px', fontWeight: 600 }}>bales</span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* 2 Big Action Buttons: + Stock In & Move to Home */}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                    gap: '10px',
-                    marginTop: '8px',
-                  }}
-                >
-                  {/* Action 1: Stock In */}
-                  <button
-                    onClick={() => openAction('purchase', item)}
+                  {/* 2 Big Action Buttons: + Stock In & Move to Home */}
+                  <div
                     style={{
-                      background: '#f0fdf4',
-                      color: '#15803d',
-                      border: '1.5px solid #86efac',
-                      borderRadius: '12px',
-                      padding: '13px 12px',
-                      fontWeight: 800,
-                      fontSize: '14px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      cursor: 'pointer',
-                      transition: 'background 0.15s',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                      gap: '10px',
+                      marginTop: '8px',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = '#dcfce7')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = '#f0fdf4')}
                   >
-                    <span style={{ fontSize: '18px' }}>📥</span>
-                    <span>+ Stock In</span>
-                  </button>
+                    {/* Action 1: Stock In */}
+                    <button
+                      onClick={() => openAction('purchase', item)}
+                      style={{
+                        background: '#f0fdf4',
+                        color: '#15803d',
+                        border: '1.5px solid #86efac',
+                        borderRadius: '12px',
+                        padding: '13px 12px',
+                        fontWeight: 800,
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        cursor: 'pointer',
+                        transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#dcfce7')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = '#f0fdf4')}
+                    >
+                      <span style={{ fontSize: '18px' }}>📥</span>
+                      <span>+ Stock In</span>
+                    </button>
 
-                  {/* Action 2: Move to Home (Changed from Shop to Home) */}
-                  <button
-                    onClick={() => openAction('dispatch', item)}
-                    disabled={(item.godown || 0) <= 0}
-                    style={{
-                      background: (item.godown || 0) > 0 ? '#eff6ff' : '#f8fafc',
-                      color: (item.godown || 0) > 0 ? '#1d4ed8' : '#94a3b8',
-                      border: '1.5px solid ' + ((item.godown || 0) > 0 ? '#93c5fd' : '#e2e8f0'),
-                      borderRadius: '12px',
-                      padding: '13px 12px',
-                      fontWeight: 800,
-                      fontSize: '14px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      cursor: (item.godown || 0) > 0 ? 'pointer' : 'not-allowed',
-                      transition: 'background 0.15s',
-                    }}
-                    onMouseEnter={(e) => (item.godown || 0) > 0 && (e.currentTarget.style.background = '#dbeafe')}
-                    onMouseLeave={(e) => (item.godown || 0) > 0 && (e.currentTarget.style.background = '#eff6ff')}
-                  >
-                    <span style={{ fontSize: '18px' }}>🏠</span>
-                    <span>Move to Home</span>
-                  </button>
+                    {/* Action 2: Move to Home */}
+                    <button
+                      onClick={() => openAction('dispatch', item)}
+                      disabled={(item.godown || 0) <= 0}
+                      style={{
+                        background: (item.godown || 0) > 0 ? '#eff6ff' : '#f8fafc',
+                        color: (item.godown || 0) > 0 ? '#1d4ed8' : '#94a3b8',
+                        border: '1.5px solid ' + ((item.godown || 0) > 0 ? '#93c5fd' : '#e2e8f0'),
+                        borderRadius: '12px',
+                        padding: '13px 12px',
+                        fontWeight: 800,
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        cursor: (item.godown || 0) > 0 ? 'pointer' : 'not-allowed',
+                        transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={(e) => (item.godown || 0) > 0 && (e.currentTarget.style.background = '#dbeafe')}
+                      onMouseLeave={(e) => (item.godown || 0) > 0 && (e.currentTarget.style.background = '#eff6ff')}
+                    >
+                      <span style={{ fontSize: '18px' }}>🏠</span>
+                      <span>Move to Home</span>
+                    </button>
+                  </div>
+
+                  {/* DROP DOWN TO CHECK BALES AND COUNT IN GODOWN AND HOME */}
+                  <div style={{ marginTop: '12px', borderTop: '1px solid #f1f5f9', paddingTop: '10px' }}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedBales((prev) => ({
+                          ...prev,
+                          [item._id]: !prev[item._id],
+                        }))
+                      }
+                      style={{
+                        width: '100%',
+                        background: isExpanded ? '#f1f5f9' : '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '10px',
+                        padding: '9px 12px',
+                        fontSize: '12.5px',
+                        fontWeight: 700,
+                        color: '#334155',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>📦</span>
+                        <span>
+                          Check Bales: <b>{godownLots.length} in Godown</b> • <b>{homeLots.length} at Home</b>
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        {isExpanded ? (
+                          <><span>Hide</span> <ChevronUp size={14} /></>
+                        ) : (
+                          <><span>View Bales</span> <ChevronDown size={14} /></>
+                        )}
+                      </span>
+                    </button>
+
+                    {/* Detailed Bales Breakdown Drawer */}
+                    {isExpanded && (
+                      <div
+                        style={{
+                          marginTop: '8px',
+                          padding: '12px',
+                          background: '#f8fafc',
+                          borderRadius: '12px',
+                          border: '1px solid #e2e8f0',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                          gap: '12px',
+                        }}
+                      >
+                        {/* Column 1: Bales in Godown */}
+                        <div>
+                          <div style={{ fontSize: '11.5px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', marginBottom: '6px' }}>
+                            🏢 Bales in Godown ({item.godown || 0} bales)
+                          </div>
+                          {godownLots.length === 0 ? (
+                            <div style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic', padding: '4px 0' }}>
+                              No bales in Godown
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                              {godownLots.map((b, idx) => (
+                                <div
+                                  key={idx}
+                                  style={{
+                                    background: '#ffffff',
+                                    border: '1px solid #bbf7d0',
+                                    borderRadius: '8px',
+                                    padding: '6px 10px',
+                                    fontSize: '12px',
+                                    color: '#15803d',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                  }}
+                                >
+                                  <div>
+                                    <b>Bale #{b.baleNumber || 'Standard'}</b>
+                                    {b.transportName && (
+                                      <span style={{ display: 'block', fontSize: '10.5px', color: '#64748b' }}>
+                                        🚚 {b.transportName}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div style={{ background: '#dcfce7', padding: '2px 8px', borderRadius: '6px', fontWeight: 900 }}>
+                                    {b.count} bales
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Column 2: Bales at Home */}
+                        <div>
+                          <div style={{ fontSize: '11.5px', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', marginBottom: '6px' }}>
+                            🏠 Bales at Home ({item.home || 0} bales)
+                          </div>
+                          {homeLots.length === 0 ? (
+                            <div style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic', padding: '4px 0' }}>
+                              No bales at Home
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                              {homeLots.map((b, idx) => (
+                                <div
+                                  key={idx}
+                                  style={{
+                                    background: '#ffffff',
+                                    border: '1px solid #bfdbfe',
+                                    borderRadius: '8px',
+                                    padding: '6px 10px',
+                                    fontSize: '12px',
+                                    color: '#1d4ed8',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                  }}
+                                >
+                                  <div>
+                                    <b>Bale #{b.baleNumber || 'Standard'}</b>
+                                  </div>
+                                  <div style={{ background: '#dbeafe', padding: '2px 8px', borderRadius: '6px', fontWeight: 900 }}>
+                                    {b.count} bales
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -1063,31 +1277,74 @@ const SimpleApp = () => {
               <span>Home: <strong>{actionModal.item.home || 0} bales</strong></span>
             </div>
 
-            {/* BALE NUMBER INPUT (with auto 2456*5 parsing) */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155', display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                <span>🏷️ Bale Number</span>
-                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>e.g. 2456 or 2456*5</span>
-              </label>
-              <input
-                type="text"
-                placeholder="Enter Bale # (e.g. 2456 or 2456*5)"
-                value={baleNumber}
-                onChange={(e) => handleBaleNumberInput(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  fontSize: '14.5px',
-                  fontWeight: 600,
-                  borderRadius: '10px',
-                  border: '1.5px solid #cbd5e1',
-                  outline: 'none',
-                }}
-              />
-              <span style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'block' }}>
-                Tip: Typing <b>2456*5</b> automatically sets Bale #2456 and Count to 5 bales.
-              </span>
-            </div>
+            {/* BALE SELECTION: DROPDOWN FOR MOVE TO HOME / INPUT FOR STOCK IN */}
+            {actionModal.type === 'dispatch' ? (
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155', display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                  <span>📦 Select Bale in Godown *</span>
+                  <span style={{ fontSize: '11px', color: '#15803d', fontWeight: 700 }}>
+                    {actionModal.item.balesInGodown?.length || 0} available in Godown
+                  </span>
+                </label>
+
+                {(!actionModal.item.balesInGodown || actionModal.item.balesInGodown.length === 0) ? (
+                  <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '10px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: 600 }}>
+                    ⚠️ No bales currently exist in Godown for this cloth.
+                  </div>
+                ) : (
+                  <select
+                    value={baleNumber}
+                    onChange={(e) => handleSelectBaleToMove(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '11px 14px',
+                      fontSize: '14.5px',
+                      fontWeight: 700,
+                      borderRadius: '10px',
+                      border: '2px solid #2563eb',
+                      background: '#ffffff',
+                      color: '#0f172a',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="">-- Choose Existing Bale from Godown --</option>
+                    {actionModal.item.balesInGodown.map((b) => (
+                      <option key={b.baleNumber || 'std'} value={b.baleNumber || ''}>
+                        Bale #{b.baleNumber || 'Standard'} — {b.count} bales in Godown {b.transportName ? `(${b.transportName})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <span style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', display: 'block' }}>
+                  Only bales that actually exist in Godown are shown above.
+                </span>
+              </div>
+            ) : (
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155', display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                  <span>🏷️ Bale Number (e.g. 2456 or 2456*5)</span>
+                  <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>New or Existing</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="Enter Bale # (e.g. 2456 or 2456*5)"
+                  value={baleNumber}
+                  onChange={(e) => handleBaleNumberInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    fontSize: '14.5px',
+                    fontWeight: 600,
+                    borderRadius: '10px',
+                    border: '1.5px solid #cbd5e1',
+                    outline: 'none',
+                  }}
+                />
+                <span style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                  Tip: Typing <b>2456*5</b> sets Bale #2456 and Count to 5 bales.
+                </span>
+              </div>
+            )}
 
             {/* Stepper Quantity Display & Buttons (-5, -1, +1, +5) */}
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>

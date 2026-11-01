@@ -86,6 +86,8 @@ const getInitialMockData = () => {
       itemId: { _id: 'item_1', itemName: 'Rajwadi', itemCode: 'RAJWADI' },
       transactionType: 'purchase',
       quantity: 50,
+      baleNumber: '2456',
+      transportName: 'Deepak',
       transactionDate: new Date(Date.now() - 86400000 * 5).toISOString(),
       remarks: 'Surat Mill invoice #401',
       createdBy: { name: 'Admin', username: 'admin' },
@@ -96,19 +98,10 @@ const getInitialMockData = () => {
       itemId: { _id: 'item_1', itemName: 'Rajwadi', itemCode: 'RAJWADI' },
       transactionType: 'dispatch',
       quantity: 15,
+      baleNumber: '2456',
+      transportName: 'Deepak',
       transactionDate: new Date(Date.now() - 86400000 * 3).toISOString(),
       remarks: 'Transferred to home display rack',
-      createdBy: { name: 'Admin', username: 'admin' },
-      isReversed: false,
-    },
-    {
-      _id: 'tx_3',
-      itemId: { _id: 'item_1', itemName: 'Rajwadi', itemCode: 'RAJWADI' },
-      transactionType: 'sale',
-      quantity: 5,
-      transactionDate: new Date(Date.now() - 86400000 * 1).toISOString(),
-      customerName: 'Sri Balaji Silks',
-      remarks: 'Cash sale bill #101',
       createdBy: { name: 'Admin', username: 'admin' },
       isReversed: false,
     },
@@ -117,6 +110,8 @@ const getInitialMockData = () => {
       itemId: { _id: 'item_2', itemName: 'Kalamkari', itemCode: 'KALAMKARI' },
       transactionType: 'purchase',
       quantity: 30,
+      baleNumber: '1088',
+      transportName: 'D.R.T.C',
       transactionDate: new Date(Date.now() - 86400000 * 4).toISOString(),
       remarks: 'Machilipatnam artisan delivery',
       createdBy: { name: 'Admin', username: 'admin' },
@@ -127,8 +122,10 @@ const getInitialMockData = () => {
       itemId: { _id: 'item_2', itemName: 'Kalamkari', itemCode: 'KALAMKARI' },
       transactionType: 'dispatch',
       quantity: 10,
+      baleNumber: '1088',
+      transportName: 'D.R.T.C',
       transactionDate: new Date(Date.now() - 86400000 * 2).toISOString(),
-      remarks: 'Hand cart dispatch',
+      remarks: 'Moved to home rack',
       createdBy: { name: 'Admin', username: 'admin' },
       isReversed: false,
     },
@@ -137,6 +134,8 @@ const getInitialMockData = () => {
       itemId: { _id: 'item_3', itemName: 'Boota', itemCode: 'BOOTA' },
       transactionType: 'purchase',
       quantity: 40,
+      baleNumber: '3104',
+      transportName: 'RAJKAMAL',
       transactionDate: new Date(Date.now() - 86400000 * 6).toISOString(),
       remarks: 'Ahmedabad parcel',
       createdBy: { name: 'Admin', username: 'admin' },
@@ -147,6 +146,8 @@ const getInitialMockData = () => {
       itemId: { _id: 'item_4', itemName: 'Leppet', itemCode: 'LEPPET' },
       transactionType: 'purchase',
       quantity: 25,
+      baleNumber: '4220',
+      transportName: 'Deepak',
       transactionDate: new Date(Date.now() - 86400000 * 7).toISOString(),
       remarks: 'Direct weaver purchase',
       createdBy: { name: 'Admin', username: 'admin' },
@@ -204,27 +205,68 @@ const computeStock = (itemId, transactions) => {
   let godown = 0;
   let home = 0;
   let sold = 0;
+  const balesMap = {}; // Tracks stock for each bale lot: { '2456': { baleNumber: '2456', godown: 35, home: 15, transportName: 'Deepak' } }
 
-  transactions
+  (transactions || [])
     .filter((tx) => !tx.isReversed && (tx.itemId?._id === itemId || tx.itemId === itemId))
     .forEach((tx) => {
       const qty = Number(tx.quantity) || 0;
+      const rawBale = (tx.baleNumber || '').trim();
+      const baleKey = rawBale || 'Standard';
+
+      if (!balesMap[baleKey]) {
+        balesMap[baleKey] = {
+          baleNumber: rawBale,
+          baleKey,
+          godown: 0,
+          home: 0,
+          transportName: tx.transportName || '',
+        };
+      }
+
       if (tx.transactionType === 'purchase' || tx.transactionType === 'opening_stock') {
         godown += qty;
+        balesMap[baleKey].godown += qty;
+        if (tx.transportName) balesMap[baleKey].transportName = tx.transportName;
       } else if (tx.transactionType === 'dispatch') {
         godown -= qty;
         home += qty;
+        balesMap[baleKey].godown -= qty;
+        balesMap[baleKey].home += qty;
+        if (tx.transportName && !balesMap[baleKey].transportName) balesMap[baleKey].transportName = tx.transportName;
       } else if (tx.transactionType === 'sale') {
         home -= qty;
         sold += qty;
+        balesMap[baleKey].home -= qty;
       }
     });
+
+  // Collect available bales currently in Godown
+  const balesInGodown = Object.values(balesMap)
+    .filter((b) => b.godown > 0)
+    .map((b) => ({
+      baleNumber: b.baleNumber,
+      count: b.godown,
+      transportName: b.transportName,
+    }));
+
+  // Collect available bales currently at Home
+  const balesInHome = Object.values(balesMap)
+    .filter((b) => b.home > 0)
+    .map((b) => ({
+      baleNumber: b.baleNumber,
+      count: b.home,
+      transportName: b.transportName,
+    }));
 
   return {
     godown: Math.max(0, godown),
     home: Math.max(0, home),
     sold: Math.max(0, sold),
     total: Math.max(0, godown) + Math.max(0, home),
+    balesInGodown,
+    balesInHome,
+    balesMap,
   };
 };
 
@@ -455,6 +497,8 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
         home: stock.home,
         sold: stock.sold,
         total: stock.total,
+        balesInGodown: stock.balesInGodown,
+        balesInHome: stock.balesInHome,
       };
     });
     return Promise.resolve({ status: 200, data: { success: true, data: report } });
@@ -494,7 +538,7 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     });
   }
 
-  // Transactions: Add Purchase
+  // Transactions: Add Purchase (Stock In to Godown)
   if (method === 'post' && cleanUrl === '/transactions/purchase') {
     const item = db.items.find((i) => i._id === data.itemId);
     const newTx = {
@@ -517,15 +561,65 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
     });
   }
 
-  // Transactions: Add Dispatch
+  // Transactions: Add Dispatch (Move to Home) with strict Bale Validation
   if (method === 'post' && cleanUrl === '/transactions/dispatch') {
     const item = db.items.find((i) => i._id === data.itemId);
     const currentStock = computeStock(data.itemId, db.transactions);
     const qty = Number(data.quantity);
+
+    if (qty <= 0) {
+      return Promise.reject({
+        response: { status: 400, data: { message: 'Quantity must be at least 1 bale.' } },
+      });
+    }
+
     if (qty > currentStock.godown) {
       return Promise.reject({
-        response: { status: 400, data: { message: `Insufficient godown stock. Available: ${currentStock.godown} bales` } },
+        response: { status: 400, data: { message: `Insufficient godown stock. Total available: ${currentStock.godown} bales` } },
       });
+    }
+
+    const reqBale = (data.baleNumber || '').trim();
+
+    // Validate that the bale actually exists in Godown with sufficient count
+    if (currentStock.balesInGodown && currentStock.balesInGodown.length > 0) {
+      if (!reqBale) {
+        return Promise.reject({
+          response: {
+            status: 400,
+            data: { message: 'Please select an existing bale from Godown.' },
+          },
+        });
+      }
+
+      const matchBale = currentStock.balesInGodown.find(
+        (b) => (b.baleNumber || '').toLowerCase() === reqBale.toLowerCase()
+      );
+
+      if (!matchBale || matchBale.count <= 0) {
+        const availableLots = currentStock.balesInGodown
+          .map((b) => (b.baleNumber ? `Bale #${b.baleNumber} (${b.count} bales)` : `Standard (${b.count} bales)`))
+          .join(', ');
+        return Promise.reject({
+          response: {
+            status: 400,
+            data: {
+              message: `Bale #${reqBale} does not exist in Godown! Available bales in Godown: ${availableLots}`,
+            },
+          },
+        });
+      }
+
+      if (qty > matchBale.count) {
+        return Promise.reject({
+          response: {
+            status: 400,
+            data: {
+              message: `Only ${matchBale.count} bales of #${reqBale} exist in Godown. You cannot move ${qty} bales.`,
+            },
+          },
+        });
+      }
     }
 
     const newTx = {
@@ -533,7 +627,7 @@ const handleMockFallback = (method, url, data = {}, params = {}) => {
       itemId: item ? { _id: item._id, itemName: item.itemName, itemCode: item.itemCode } : { _id: data.itemId, itemName: 'Cloth' },
       transactionType: 'dispatch',
       quantity: qty,
-      baleNumber: data.baleNumber || '',
+      baleNumber: reqBale,
       transportName: data.transportName || '',
       transactionDate: data.transactionDate || new Date().toISOString(),
       remarks: data.remarks || '',
